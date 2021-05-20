@@ -1,4 +1,4 @@
-package asterisk
+package sangoma
 
 import (
 	"bytes"
@@ -12,14 +12,16 @@ import (
 )
 
 type Sangoma struct {
-	DeviceIP  	string	`toml:"device_ip"`
-	Username     	string	`toml:"username"`
-	Password 	string	`toml:"password"`
+	DevicesIP  	[]string	`toml:"devices_ip"`
+	DevicesName	[]string	`toml:"devices_name"`
+	Username     	string		`toml:"username"`
+	Password 	string		`toml:"password"`
 }
 
 var SangomaConfig = `
   ##Sample Config
-  #sangoma_vega_ip = "0.0.0.0"
+  #devices_ip = ["0.0.0.0"]
+  #devices_name = [""]
   #username = "user"
   #password = "password"
 `
@@ -46,71 +48,73 @@ func (s *Sangoma) Description() string {
 
 func (s *Sangoma) Gather(acc telegraf.Accumulator) error {
 
-	client := &http.Client{}
+	for k, device := range s.DevicesIP {
 
-	jar := &myjar{}
-	jar.jar = make(map[string][]*http.Cookie)
-	client.Jar = jar
+		client := &http.Client{}
 
-	/* Authenticate */
-	payloadRqst := "username=" + s.Username + "&password=" + s.Password + "&last=1"
-	var payload = []byte(payloadRqst)
-	req, _ := http.NewRequest("POST", "http://"+s.DeviceIP+"/vs_login", bytes.NewBuffer(payload))
-	q := req.URL.Query()
-	req.URL.RawQuery = q.Encode()
+		jar := &myjar{}
+		jar.jar = make(map[string][]*http.Cookie)
+		client.Jar = jar
 
-	resp, _ := client.Do(req)
-	/*if err != nil {
-		fmt.Printf("Error : %s", err)
-	}*/
+		/* Authenticate */
+		payloadRqst := "username=" + s.Username + "&password=" + s.Password + "&last=1"
+		var payload = []byte(payloadRqst)
+		req, _ := http.NewRequest("POST", "http://"+device+"/vs_login", bytes.NewBuffer(payload))
+		q := req.URL.Query()
+		req.URL.RawQuery = q.Encode()
 
-	/* Get Details */
-	req, _ = http.NewRequest("GET", "http://"+s.DeviceIP+"/vsconfig?sid=0&form_name=95&dont_need_uri_decode=1&cli_command=show%20ports", nil)
-	resp, _ = client.Do(req)
-	/*if err != nil {
-		fmt.Printf("Error : %s", err)
-	}*/
+		resp, _ := client.Do(req)
+		/*if err != nil {
+			fmt.Printf("Error : %s", err)
+		}*/
 
-	bodyText, _ := ioutil.ReadAll(resp.Body)
-	body := string(bodyText)
+		/* Get Details */
+		req, _ = http.NewRequest("GET", "http://"+device+"/vsconfig?sid=0&form_name=95&dont_need_uri_decode=1&cli_command=show%20ports", nil)
+		resp, _ = client.Do(req)
+		/*if err != nil {
+			fmt.Printf("Error : %s", err)
+		}*/
 
-	fxo_results := strings.Split(body, "\n")
+		bodyText, _ := ioutil.ReadAll(resp.Body)
+		body := string(bodyText)
 
-	fxo_total_channels := 0
-	fxo_inuse_channels := 0
-	fxo_available_channels := 0
-	fxo_disconnected_channels := 0
+		fxo_results := strings.Split(body, "\n")
 
-	for _, channel := range fxo_results {
-		if strings.Contains(channel, "ready") || strings.Contains(channel, "busy") || strings.Contains(channel, "offline") {
-			//chan_data := strings.Split(channel, "")
-			//print(chan_data)
-			if len(channel) > 2 {
-				if strings.Contains(channel, "ready") {
-					fxo_available_channels = fxo_available_channels + 1
+		fxo_total_channels := 0
+		fxo_inuse_channels := 0
+		fxo_available_channels := 0
+		fxo_disconnected_channels := 0
+
+		for _, channel := range fxo_results {
+			if strings.Contains(channel, "ready") || strings.Contains(channel, "busy") || strings.Contains(channel, "offline") {
+				//chan_data := strings.Split(channel, "")
+				//print(chan_data)
+				if len(channel) > 2 {
+					if strings.Contains(channel, "ready") {
+						fxo_available_channels = fxo_available_channels + 1
+					}
+					if strings.Contains(channel, "busy") {
+						fxo_inuse_channels = fxo_inuse_channels + 1
+					}
+					if strings.Contains(channel, "offline") {
+						fxo_disconnected_channels = fxo_disconnected_channels + 1
+					}
+					fxo_total_channels += 1
 				}
-				if strings.Contains(channel, "busy") {
-					fxo_inuse_channels = fxo_inuse_channels + 1
-				}
-				if strings.Contains(channel, "offline") {
-					fxo_disconnected_channels = fxo_disconnected_channels + 1
-				}
-				fxo_total_channels += 1
 			}
 		}
+
+		//Fields association
+		fields := make(map[string]interface{})
+        	fields[s.DevicesName[k] + ".fxo_total_channels"] = fxo_total_channels 
+		fields[s.DevicesName[k] + ".fxo_inuse_channels"] = fxo_inuse_channels
+		fields[s.DevicesName[k] + ".fxo_available_channels"] = fxo_available_channels
+		fields[s.DevicesName[k] + ".fxo_disconnected_channels"] = fxo_disconnected_channels
+
+		tags := make(map[string]string)
+
+		acc.AddFields("sangoma", fields, tags)
 	}
-
-	//Fields association
-	fields := make(map[string]interface{})
-        fields["fxo_total_channels"] = fxo_total_channels 
-	fields["fxo_inuse_channels"] = fxo_inuse_channels
-	fields["fxo_available_channels"] = fxo_available_channels
-	fields["fxo_disconnected_channels"] = fxo_disconnected_channels
-
-	tags := make(map[string]string)
-
-	acc.AddFields("asterisk", fields, tags)
-
 	return nil
 }
 
